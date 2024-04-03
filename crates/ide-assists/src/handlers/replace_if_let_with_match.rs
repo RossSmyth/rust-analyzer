@@ -299,8 +299,8 @@ fn pick_pattern_and_expr_order(
     expr2: ast::Expr,
 ) -> Option<(ast::Pat, ast::Expr, ast::Expr)> {
     let res = match (pat, pat2) {
-        (ast::Pat::WildcardPat(_), _) => return None,
-        (pat, ast::Pat::WildcardPat(_)) => (pat, expr, expr2),
+        (ast::Pat::WildcardPat(_), _)  => return None,
+        (pat, pat2) if is_wildcard(pat2.clone()) => (pat, expr, expr2),
         (pat, _) if is_empty_expr(&expr2) => (pat, expr, expr2),
         (_, pat) if is_empty_expr(&expr) => (pat, expr2, expr),
         (pat, pat2) => match (binds_name(sema, &pat), binds_name(sema, &pat2)) {
@@ -312,6 +312,22 @@ fn pick_pattern_and_expr_order(
         },
     };
     Some(res)
+}
+
+/// This checks nested patterns to see if they are all wildcards or not
+/// 
+/// Assumption: patterns are not nested super deep.
+fn is_wildcard(pat: ast::Pat) -> bool {
+        match pat {
+            ast::Pat::WildcardPat(_) => true,
+            ast::Pat::OrPat(pat) => pat.pats().all(is_wildcard),
+            ast::Pat::ParenPat(pat) => pat.pat().is_some_and(is_wildcard),
+            ast::Pat::RecordPat(pat) => pat.record_pat_field_list().is_some_and(|field_list| field_list.fields().all(|field| field.pat().is_some_and(is_wildcard))),
+            ast::Pat::SlicePat(pat) => pat.pats().all(is_wildcard),
+            ast::Pat::TuplePat(pat) if pat.fields().count() > 0 => pat.fields().all(is_wildcard),
+            ast::Pat::TupleStructPat(pat) => pat.fields().all(is_wildcard),
+            _ => false,
+        }
 }
 
 fn is_empty_expr(expr: &ast::Expr) -> bool {
@@ -849,6 +865,27 @@ fn foo(x: Result<i32, ()>) {
     }
 }
 "#,
+        );
+
+        check_assist(
+            replace_match_with_if_let,
+            r#"
+//- minicore: result
+fn foo(x: Result<i32, ()>) {
+    $0match x {
+        Ok(0) => (),
+        Ok(_) | Err(_) => println!("none"),
+    }
+}
+    "#,
+            r#"
+fn foo(x: Result<i32, ()>) {
+    if let Ok(x) = x {
+    } else {
+        println!("none")
+    }
+}
+    "#,
         );
     }
 
